@@ -1,0 +1,161 @@
+//Projeto final - Carro radio controlado
+//esta é o codigo para o controlador que fica dentro do carro
+//o controlador recebera o sinal pelo transceptor do acelerometro e do joystick e qual o estado esta operando
+//a partir desses dados determinara a velocidade e direcao dos motores
+//caso esteja no modo autonomo, executará a programacao semelhante ao do Carro autonomo
+//o carro possui tambem um sensor de distancia
+//o valor da distancia sera tambem transmitido para o transceptor
+
+#include <SPI.h>
+#include <nRF24L01.h>
+#include <RF24.h>
+RF24 radio(7, 8); // CNS, CE
+//http://howtomechatronics.com/tutorials/arduino/arduino-wireless-communication-nrf24l01-tutorial/
+
+#include <SharpIR.h>
+
+#define ir A0
+#define model 1080
+// ir: the pin where your sensor is attached
+// model: an int that determines your sensor:  1080 for GP2Y0A21Y
+//                                            20150 for GP2Y0A02Y
+//                                            (working distance range according to the datasheets)
+//https://github.com/guillaume-rico/SharpIR
+
+const byte addresses[][6] = {"00001", "00002"};
+
+// variaveis que serão recebidas pelo carro
+typedef struct {
+  int AcX;
+  int AcY;
+  int AcZ;
+  int Tmp;
+  int GyX;
+  int GyY;
+  int GyZ;
+  int JoyX;
+  int JoyY;
+  int Estado;
+
+}
+A_t;
+
+
+//variaveis que serão enviadas para o controle
+typedef struct {
+  int Distancia=0;
+}
+B_t;
+
+A_t arduino1;
+B_t arduino2;
+
+int AcXBase;
+int AcYBase;
+int Velocidade1;
+int Velocidade2;
+
+int PinoVelocidade1 = 9;
+int Entrada1 = 2; 
+int Entrada2 = 3;
+
+int PinoVelocidade2 = 10; 
+int Entrada3 = 4; 
+int Entrada4 = 5; 
+
+int Parar = 0;
+
+SharpIR SharpIR(ir, model);
+
+void setup() {
+  Serial.begin(9600);
+  radio.begin();
+  radio.openWritingPipe(addresses[0]); // 00002
+  radio.openReadingPipe(1, addresses[1]); // 00001
+  radio.setPALevel(RF24_PA_MIN);
+  radio.startListening();
+}
+void loop() {
+  //Recebe um valor base do acelerometro que será usado para a posicao inicial do acererometro
+  if (radio.available()) {
+    radio.read(&arduino1, sizeof(arduino1));
+    AcXBase = arduino1.AcX;
+    AcYBase = arduino1.AcY;
+    //leitura da antena
+    while (true) {
+      delay(5);
+      radio.startListening();
+      if (radio.available()) {
+        radio.read(&arduino1, sizeof(arduino1));
+        //caso esteja no primeiro estado(acelerometro), usara a seguinte conta para determinar a velocidade dos motores
+        if(arduino1.Estado==1){
+          Velocidade1 = ((arduino1.AcX - AcXBase) + (arduino1.AcY - AcYBase)) / 50;
+          Velocidade2 = ((arduino1.AcX - AcXBase) - (arduino1.AcY - AcYBase)) / 50;
+        }
+        //caso esteja no segundo estado(Joystick), usara a seguinte conta para determinar a velocidade dos motores
+        if(arduino1.Estado==2){
+          Velocidade1 = ((arduino1.JoyX - 512) + (arduino1.JoyY - 512))/2;
+          Velocidade2 = ((arduino1.JoyX - 512) - (arduino1.JoyY - 512))/2;
+        }
+        Motor(Velocidade1, PinoVelocidade1, Entrada1, Entrada2);
+        Motor(Velocidade2, PinoVelocidade2, Entrada3, Entrada4);
+     }
+      //caso esteja no terceiro estado, ficara no modo autonomo e executara uma programacao semelhante ao do carro autonomo
+     if(arduino1.Estado==3){
+      Autonomo();
+     }
+     //desabilita a leitura da antena, e comeca a enviar os proprios dados da antena
+     delay(5);
+     radio.stopListening();
+     arduino2.Distancia = SharpIR.distance();
+     radio.write(&arduino2, sizeof(arduino2));
+    }
+  }
+}
+
+//funcao que define a velocidade e direção de um determinado motor 
+void Motor (int Velocidade, int Pino, int Negativo, int Positivo) {
+   if(Velocidade<=-255){
+     Velocidade = -255;
+   }
+   if(Velocidade>=255){
+     Velocidade = 255;
+   }
+  if (Velocidade >= 0) {
+    analogWrite(Pino, Velocidade);
+    digitalWrite(Negativo, LOW);
+    digitalWrite(Positivo, HIGH);
+  }
+  if (Velocidade < 0) {
+    analogWrite(Pino, -Velocidade);
+    digitalWrite(Negativo, HIGH);
+    digitalWrite(Positivo, LOW);
+  }
+}
+
+//funcao do modo autonomo
+void Autonomo(){
+  if(arduino2.Distancia>=10){
+    if(Parar==0){ //se o carrinho estiver mudando de movimento ele primeiro irá parar para não forçar muito os motores
+      Motor(0, PinoVelocidade1, Entrada1, Entrada2);
+      Motor(0, PinoVelocidade2, Entrada3, Entrada4);
+      Parar=1;
+      delay(5);
+    }
+    Motor(-150, PinoVelocidade1, Entrada1, Entrada2);
+    Motor(-150, PinoVelocidade2, Entrada3, Entrada4);
+  }
+  // caso sensor veja um objeto em 10cm, um lado irá para frente, enquanto o outro irá para trás, assim fazendo o carrinho girar no proprio eixo
+  if(arduino2.Distancia<=25){
+    if(Parar==1)//se o carrinho estiver mudando de movimento ele primeiro irá parar para não forçar muito os motores
+    {
+      Motor(0, PinoVelocidade1, Entrada1, Entrada2);
+      Motor(0, PinoVelocidade2, Entrada3, Entrada4);
+      Parar=0;
+      delay(5);
+    }
+    Motor(-150, PinoVelocidade1, Entrada1, Entrada2);
+    Motor(150, PinoVelocidade2, Entrada3, Entrada4);
+    delay(20);
+  }  
+}
