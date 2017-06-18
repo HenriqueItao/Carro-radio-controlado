@@ -1,0 +1,162 @@
+//Projeto final - Carro radio controlado
+//esta é o codigo para o arduino que enviará os controles para o carrinho
+//o projeto possui 3 estados, um controlado pelo acelerometro, um controlado pelo joystick e um autonomo
+//neste projeto, o arduino receberá o sinal do acelerometro ou do joystick e mandara para o carrinho atraves de um transceptor
+//para definir o estado, se tem 3 botoes, um para cada estado
+//o estado é mostrada na tela de lcd e pelo led rgb
+//além disso, é recebido pelo carrinho um sinal do sensor de distancia(para saber se tem algo na frente do carrinho
+//essa distãncia tambpem eh mostrada no lcd
+
+
+//http://blog.filipeflop.com/sensores/tutorial-acelerometro-mpu6050-arduino.html
+//http://howtomechatronics.com/tutorials/arduino/arduino-wireless-communication-nrf24l01-tutorial/
+#include <SPI.h>
+#include <nRF24L01.h>
+#include <RF24.h>
+#include<Wire.h>
+#include <LiquidCrystal_I2C.h>
+// Inicializa o LCD
+LiquidCrystal_I2C lcd(0x27, 2, 1, 0, 4, 5, 6, 7, 3, POSITIVE);
+RF24 radio(7, 8); // CNS, CE
+const byte addresses[][6] = {"00001", "00002"};
+//Endereco I2C do MPU60x50
+const int MPU=0x68;  
+
+// variaveis que serão enviadas para o carro
+typedef struct{
+  int AcX;
+  int AcY;
+  int AcZ;
+  int Tmp;
+  int GyX;
+  int GyY;
+  int GyZ;
+  int JoyX;
+  int JoyY;
+  int Estado=1;
+
+}
+A_t;
+
+//variaveis que serão recebidas para o controle
+typedef struct{
+  int Distancia;
+}
+B_t;
+
+int joyPin1 = 0;                 // Eixo 1 do Joystick
+int joyPin2 = 1;                 // Eixo 2 do Joystick
+
+//Botoes para mudança de estados
+int Botao1 = 4;
+int Botao2 = 5;
+int Botao3 = 6;
+
+int redpin = 3; // Seleciona o pino para o red LED
+int bluepin = 9; // Seleciona o pino para o blue LED
+int greenpin = 10 ;// Seleciona o pino para o green LED
+
+A_t arduino1; 
+B_t arduino2;
+
+void setup() {
+  Serial.begin(9600);
+  
+  radio.begin();
+  radio.openWritingPipe(addresses[1]); // 00001
+  radio.openReadingPipe(1, addresses[0]); // 00002
+  radio.setPALevel(RF24_PA_MIN);
+  //Inicializa o LCD
+  lcd.begin(16, 2);
+  Wire.begin();
+  Wire.beginTransmission(MPU);
+  Wire.write(0x6B); 
+   
+  //Inicializa o MPU-6050
+  Wire.write(0); 
+  Wire.endTransmission(true);
+
+  pinMode (Botao1, INPUT);
+  pinMode (Botao2, INPUT);
+  pinMode (Botao3, INPUT);
+
+  pinMode (redpin, OUTPUT);
+  pinMode (bluepin, OUTPUT);
+  pinMode (greenpin, OUTPUT);
+  
+  digitalWrite(redpin, HIGH);
+  digitalWrite(greenpin, LOW);
+  digitalWrite(bluepin, LOW);
+
+}
+void loop() {
+  //desabilita a leitura da antena, e comeca a enviar os proprios dados da antena
+  delay(5);
+  radio.stopListening();
+  Wire.beginTransmission(MPU);
+  Wire.write(0x3B);  // starting with register 0x3B (ACCEL_XOUT_H)
+  Wire.endTransmission(false);
+  //Solicita os dados do sensor
+  Wire.requestFrom(MPU,14,true);  
+  //caso esteja no estado 1 é executada a leitura do acelerometro
+  if(arduino1.Estado==1){
+    //Armazena o valor dos sensores nas variaveis correspondentes
+    arduino1.AcX=Wire.read()<<8|Wire.read();  //0x3B (ACCEL_XOUT_H) & 0x3C (ACCEL_XOUT_L)     
+    arduino1.AcY=Wire.read()<<8|Wire.read();  //0x3D (ACCEL_YOUT_H) & 0x3E (ACCEL_YOUT_L)
+    arduino1.AcZ=Wire.read()<<8|Wire.read();  //0x3F (ACCEL_ZOUT_H) & 0x40 (ACCEL_ZOUT_L)
+    arduino1.Tmp=Wire.read()<<8|Wire.read();  //0x41 (TEMP_OUT_H) & 0x42 (TEMP_OUT_L)
+    arduino1.GyX=Wire.read()<<8|Wire.read();  //0x43 (GYRO_XOUT_H) & 0x44 (GYRO_XOUT_L)
+    arduino1.GyY=Wire.read()<<8|Wire.read();  //0x45 (GYRO_YOUT_H) & 0x46 (GYRO_YOUT_L)
+    arduino1.GyZ=Wire.read()<<8|Wire.read();  //0x47 (GYRO_ZOUT_H) & 0x48 (GYRO_ZOUT_L)
+    delay(5);
+  }
+  
+  //caso esteja no estado 2 é executada a leitura do Joystick
+  if(arduino1.Estado==2){
+    arduino1.JoyX=analogRead(joyPin1);   
+    delay(10);             
+    arduino1.JoyY=analogRead(joyPin2); 
+  }
+  radio.write(&arduino1, sizeof(arduino1));
+  LeituraBotao();
+  //Habilita a leitura da antena
+  radio.startListening();
+  if (radio.available()){
+    radio.read(&arduino2, sizeof(arduino2));
+    //escreve no LCD
+    lcd.clear();
+    lcd.setCursor(0,0); //Comeca no caracter 0 na linha 0
+    lcd.print("Distancia =");   
+    lcd.setCursor(13,0); //Comeca no caracter 0 na linha 0 
+    lcd.print(arduino2.Distancia);
+    lcd.setCursor(0,1); //Comeca no caracter 0 na linha 0
+    lcd.print("Estado =");   
+    lcd.setCursor(9,1); //Comeca no caracter 0 na linha 1
+    lcd.print(arduino1.Estado);
+  }
+}
+
+//Funcao que realiza a leitura dos botoes e a mudança de estado
+void LeituraBotao(){
+  if(digitalRead(Botao1)){
+    arduino1.Estado=1;
+    //acende o led vermelho
+    digitalWrite(redpin, HIGH);
+    digitalWrite(greenpin, LOW);
+    digitalWrite(bluepin, LOW);
+  }
+  if(digitalRead(Botao2)){
+    arduino1.Estado=2;
+    //acende o led Verde
+    digitalWrite(redpin, LOW);
+    digitalWrite(greenpin, HIGH);
+    digitalWrite(bluepin, LOW);
+  }
+  if(digitalRead(Botao3)){
+    arduino1.Estado=3;
+    //acende o led azul
+    digitalWrite(redpin, LOW);
+    digitalWrite(greenpin, LOW);
+    digitalWrite(bluepin, HIGH);
+  }
+}
